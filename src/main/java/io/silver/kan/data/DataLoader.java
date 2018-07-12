@@ -2,6 +2,7 @@ package io.silver.kan.data;
 
 
 import io.silver.kan.bean.OfflineCouponRecord;
+import io.silver.kan.o2o.coupon.OfflineO2OCouponDataEncoder;
 import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.ml.feature.OneHotEncoderEstimator;
 import org.apache.spark.ml.feature.OneHotEncoderModel;
@@ -30,31 +31,78 @@ public class DataLoader {
     public static void main(String[] args) throws AnalysisException {
         SparkSession spark = SparkSession.builder()
                 .appName("O2O Coupon Prediction")
-                .config("spark.master", "local")
-                .config("spark.some.config.option", "some-value")
+                // local[*] 表示使用所有 CPU
+                .config("spark.master", "local[*]")
                 .getOrCreate();
 
-        String csvFile = "./data/ccf_offline_stage1_test_revised.csv";
+        String csvFile = "./data/ccf_offline_stage1_train.csv";
 
-        Dataset<Row> df = spark.read().option("header","true").csv(csvFile).select("User_id");
+        Dataset<Row> df = spark.read().option("header","true").csv(csvFile);
+        df.createOrReplaceTempView("ccf_offline_stage1_train");
 
-        // 离散变量 string转化为 int index
-        StringIndexer userIdStringIndexer = new StringIndexer().setInputCol("User_id").setOutputCol("user_id_index");
+
+        // SQL 转换处理
+        df = spark.sql("SELECT * ," +
+                // FLAG
+                " CASE " +
+                "   WHEN (Date_received = 'null' AND Date <> 'null') THEN 0 " +
+                "   WHEN (Date_received <> 'null' AND Date = 'null') THEN -1 " +
+                "   WHEN (Date_received <> 'null' AND Date <> 'null') THEN 1 " +
+                " END " +
+                "   AS flag " + "," +
+
+                // Coupon ID 转换成有或无
+                " CASE " +
+                "   WHEN Coupon_id = 'null' THEN 0 ELSE 1 " +
+                " END " +
+                " AS coupon " + "," +
+
+                // DISTANCE 加1
+                " CASE " +
+                "   WHEN Distance = 'null' THEN 0 ELSE Distance + 1 " +
+                " END " +
+                " AS distance1 " +
+                " from ccf_offline_stage1_train ");
+
+        // User ID 转换
+        StringIndexer userIdStringIndexer = new StringIndexer().setInputCol("User_id").setOutputCol("user_id");
         df = userIdStringIndexer.fit(df).transform(df);
+
+        // DISTANCE 归一化
+        OneHotEncoderEstimator encoder = new OneHotEncoderEstimator()
+                .setInputCols(new String[] {"distance1"})
+                .setOutputCols(new String[] {"distance_one_hot"});
+        df = encoder.fit(df).transform(df);
+
+        df.show();
+
+
+        // ML Pipeline
+
+        // 训练集， 测试集
+
+
+        // 分别使用决策树， 逻辑回归，进行训练
+
+
+
+//
+//        StringIndexer userIdStringIndexer = new StringIndexer().setInputCol("User_id").setOutputCol("user_id_index");
+//        df = userIdStringIndexer.fit(df).transform(df);
 
 //        VectorIndexer userIdVectorIndexer = new VectorIndexer()
 //                .setInputCol("User_id_index")
 //                .setOutputCol("User_id_vec");
 //        userIdVectorIndexer.fit(df);
 
-        OneHotEncoderEstimator encoder = new OneHotEncoderEstimator()
-                .setInputCols(new String[] {"user_id_index"})
-                .setOutputCols(new String[] {"user_id_vec"});
-
-        df = encoder.fit(df).transform(df);
-        df.select("user_id_vec").show(false);
-
-        BinaryClassificationMetrics metrics = new BinaryClassificationMetrics(df);
+//        OneHotEncoderEstimator encoder = new OneHotEncoderEstimator()
+//                .setInputCols(new String[] {"user_id_index"})
+//                .setOutputCols(new String[] {"user_id_vec"});
+//
+//        df = encoder.fit(df).transform(df);
+//        df.select("user_id_vec").show(false);
+//
+//        BinaryClassificationMetrics metrics = new BinaryClassificationMetrics(df);
 
 //        OneHotEncoderEstimator encoder = new OneHotEncoderEstimator();
 //        encoder.setInputCols(new String[]{"User_id"});
@@ -92,6 +140,5 @@ public class DataLoader {
 //        transformedDS.collect(); // Returns [2, 3, 4]
 //
 //        Dataset<OfflineCouponRecord> recordDf = spark.read().csv(csvFile).as(recordEncoder);
-
     }
 }
